@@ -1,0 +1,30 @@
+# Secrets
+.env
+
+# Docs (keep only README.md at root)
+docs/
+
+# Data files (CSVs are too large; only stocks.db is needed at runtime)
+data/*.csv
+
+# Results (local eval outputs)
+results/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+
+# Jupyter notebooks
+*.ipynb
+
+# Streamlit
+.streamlit/secrets.toml
