@@ -27,9 +27,15 @@ model_choice = st.sidebar.radio(
     help="gpt-4o-mini: faster, cheaper. gpt-4o: larger, more capable."
 )
 
+if "session_cost" not in st.session_state:
+    st.session_state.session_cost = 0.0
+
 st.sidebar.markdown("---")
+st.sidebar.markdown(f"**Session cost:** `${st.session_state.session_cost:.5f}`")
+
 if st.sidebar.button("🗑️ Clear Conversation", use_container_width=True):
     st.session_state.messages = []
+    st.session_state.session_cost = 0.0
     st.rerun()
 
 st.sidebar.markdown("---")
@@ -71,7 +77,7 @@ for i, msg in enumerate(st.session_state.messages):
         st.markdown(f"**Agent:** {msg['content']}")
         if "metadata" in msg:
             meta = msg["metadata"]
-            st.caption(f"🤖 {meta['architecture']} | {meta['model']} | ⏱️ {meta['time']}s | Tools: {meta['tools']}")
+            st.caption(f"🤖 {meta['architecture']} | {meta['model']} | ⏱️ {meta['time']}s | Tools: {meta['tools']} | 💲{meta['cost']}")
     st.markdown("")
 
 # ─────────────────────────────────────────────────────────────
@@ -117,14 +123,17 @@ if submit_button and user_input:
                 agent_response = result.answer
                 tools_used = result.tools_called
                 architecture = "Single Agent"
+                cost_usd = result.cost_usd
             else:  # Multi-Agent
                 result = run_multi_agent(full_question, model=model_choice, verbose=False)
                 agent_response = result["final_answer"]
                 tools_used = [t for r in result["agent_results"] for t in r.tools_called]
                 architecture = result["architecture"]
+                cost_usd = result["cost_usd"]
 
             elapsed = round(time.time() - t0, 2)
             tools_str = ", ".join(set(tools_used)) if tools_used else "none"
+            st.session_state.session_cost += cost_usd
 
             # Add agent response to history with metadata
             st.session_state.messages.append({
@@ -134,7 +143,8 @@ if submit_button and user_input:
                     "architecture": architecture,
                     "model": model_choice,
                     "time": elapsed,
-                    "tools": tools_str
+                    "tools": tools_str,
+                    "cost": f"${cost_usd:.5f}",
                 }
             })
 

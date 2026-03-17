@@ -10,6 +10,16 @@ from src.schemas import (
     MARKET_TOOLS, FUNDAMENTAL_TOOLS, SENTIMENT_TOOLS,
 )
 
+# Cost per token (USD) — update if OpenAI changes pricing
+_PRICING = {
+    "gpt-4o-mini": {"input": 0.15 / 1_000_000, "output": 0.60 / 1_000_000},
+    "gpt-4o":      {"input": 2.50 / 1_000_000, "output": 10.00 / 1_000_000},
+}
+
+def _calc_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
+    p = _PRICING.get(model, _PRICING["gpt-4o-mini"])
+    return prompt_tokens * p["input"] + completion_tokens * p["output"]
+
 # ─────────────────────────────────────────────────────────────
 # SYSTEM PROMPTS
 # ─────────────────────────────────────────────────────────────
@@ -92,9 +102,11 @@ def run_specialist_agent(
     max_iters: int = 8,
     verbose: bool = False,
 ) -> AgentResult:
-    messages     = [{"role": "system", "content": system_prompt}, {"role": "user", "content": task}]
-    tools_called = []
-    raw_data     = {}
+    messages          = [{"role": "system", "content": system_prompt}, {"role": "user", "content": task}]
+    tools_called      = []
+    raw_data          = {}
+    total_prompt      = 0
+    total_completion  = 0
 
     for _ in range(max_iters):
         kwargs = {"model": model, "messages": messages}
@@ -104,11 +116,17 @@ def run_specialist_agent(
 
         response = client.chat.completions.create(**kwargs)
         msg      = response.choices[0].message
+        usage    = response.usage
+        if usage:
+            total_prompt     += usage.prompt_tokens
+            total_completion += usage.completion_tokens
 
         if not msg.tool_calls:
             return AgentResult(
                 agent_name=agent_name, answer=msg.content or "",
                 tools_called=tools_called, raw_data=raw_data,
+                prompt_tokens=total_prompt, completion_tokens=total_completion,
+                cost_usd=_calc_cost(model, total_prompt, total_completion),
             )
 
         messages.append(msg)
@@ -127,6 +145,8 @@ def run_specialist_agent(
     return AgentResult(
         agent_name=agent_name, answer="Max iterations reached",
         tools_called=tools_called, raw_data=raw_data,
+        prompt_tokens=total_prompt, completion_tokens=total_completion,
+        cost_usd=_calc_cost(model, total_prompt, total_completion),
     )
 
 
@@ -160,7 +180,9 @@ def _run_specialist(name, prompt, task, schemas, model, verbose) -> AgentResult:
 
 
 def run_multi_agent(question: str, model: str = "gpt-4o-mini", verbose: bool = False) -> dict:
-    t0 = time.time()
+    t0               = time.time()
+    total_prompt     = 0
+    total_completion = 0
 
     # ── Step 1: Orchestrator decomposes the question ──────────
     orch_resp = client.chat.completions.create(
@@ -171,6 +193,9 @@ def run_multi_agent(question: str, model: str = "gpt-4o-mini", verbose: bool = F
         ],
         response_format={"type": "json_object"},
     )
+    if orch_resp.usage:
+        total_prompt     += orch_resp.usage.prompt_tokens
+        total_completion += orch_resp.usage.completion_tokens
     try:
         tasks = json.loads(orch_resp.choices[0].message.content)
     except Exception:
@@ -199,7 +224,10 @@ def run_multi_agent(question: str, model: str = "gpt-4o-mini", verbose: bool = F
             for name, prompt, task, schemas in specialist_configs
         }
         for future in as_completed(futures):
-            agent_results.append(future.result())
+            r = future.result()
+            total_prompt     += r.prompt_tokens
+            total_completion += r.completion_tokens
+            agent_results.append(r)
 
     # ── Step 3: Critic reviews each specialist ────────────────
     all_critic_issues = []
@@ -220,6 +248,9 @@ def run_multi_agent(question: str, model: str = "gpt-4o-mini", verbose: bool = F
                 ],
                 response_format={"type": "json_object"},
             )
+            if critic_resp.usage:
+                total_prompt     += critic_resp.usage.prompt_tokens
+                total_completion += critic_resp.usage.completion_tokens
             critic_out = json.loads(critic_resp.choices[0].message.content)
             issues = critic_out.get("issues", [])
             if issues:
@@ -242,10 +273,16 @@ def run_multi_agent(question: str, model: str = "gpt-4o-mini", verbose: bool = F
             {"role": "user",   "content": synthesis_input},
         ],
     )
+    if synth_resp.usage:
+        total_prompt     += synth_resp.usage.prompt_tokens
+        total_completion += synth_resp.usage.completion_tokens
 
     return {
-        "final_answer":  synth_resp.choices[0].message.content,
-        "agent_results": agent_results,
-        "elapsed_sec":   round(time.time() - t0, 2),
-        "architecture":  "orchestrator-parallel-critic",
+        "final_answer":       synth_resp.choices[0].message.content,
+        "agent_results":      agent_results,
+        "elapsed_sec":        round(time.time() - t0, 2),
+        "architecture":       "orchestrator-parallel-critic",
+        "prompt_tokens":      total_prompt,
+        "completion_tokens":  total_completion,
+        "cost_usd":           _calc_cost(model, total_prompt, total_completion),
     }
