@@ -2,8 +2,15 @@ import sqlite3
 import requests
 import yfinance as yf
 import pandas as pd
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
 
 from src.config import ALPHAVANTAGE_API_KEY, DB_PATH
+
+
+def _av_rate_limited(data: dict) -> bool:
+    """Return True if AlphaVantage responded with a rate-limit or access message."""
+    return "Note" in data or "Information" in data
 
 
 def get_price_performance(tickers: list, period: str = "1y") -> dict:
@@ -28,17 +35,40 @@ def get_price_performance(tickers: list, period: str = "1y") -> dict:
 
 
 def get_market_status() -> dict:
-    return requests.get(
-        f"https://www.alphavantage.co/query?function=MARKET_STATUS&apikey={ALPHAVANTAGE_API_KEY}",
-        timeout=10,
-    ).json()
+    try:
+        data = requests.get(
+            f"https://www.alphavantage.co/query?function=MARKET_STATUS&apikey={ALPHAVANTAGE_API_KEY}",
+            timeout=10,
+        ).json()
+        if not _av_rate_limited(data):
+            return data
+    except Exception:
+        pass
+    # Fallback: infer NYSE open/closed from current time
+    now = datetime.now(ZoneInfo("America/New_York"))
+    is_weekday = now.weekday() < 5
+    status = (
+        "open"
+        if is_weekday and time(9, 30) <= now.time() <= time(16, 0)
+        else "closed"
+    )
+    return {
+        "markets": [{"market_type": "Equity", "primary_exchanges": "NYSE, NASDAQ", "current_status": status}],
+        "note": "Estimated from NYSE trading hours — AlphaVantage limit reached",
+    }
 
 
 def get_top_gainers_losers() -> dict:
-    return requests.get(
-        f"https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey={ALPHAVANTAGE_API_KEY}",
-        timeout=10,
-    ).json()
+    try:
+        data = requests.get(
+            f"https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey={ALPHAVANTAGE_API_KEY}",
+            timeout=10,
+        ).json()
+        if not _av_rate_limited(data):
+            return data
+    except Exception:
+        pass
+    return {"error": "Top gainers/losers unavailable — AlphaVantage limit reached and no free alternative exists"}
 
 
 def get_news_sentiment(ticker: str, limit: int = 5) -> dict:
@@ -48,21 +78,42 @@ def get_news_sentiment(ticker: str, limit: int = 5) -> dict:
             f"&tickers={ticker}&limit={limit}&apikey={ALPHAVANTAGE_API_KEY}",
             timeout=10,
         ).json()
-        articles = data.get("feed", [])
-        if articles:
-            return {
-                "ticker": ticker,
-                "articles": [
-                    {
-                        "title":     a.get("title"),
-                        "source":    a.get("source"),
-                        "sentiment": a.get("overall_sentiment_label"),
-                        "score":     a.get("overall_sentiment_score"),
-                    }
-                    for a in articles[:limit]
-                ],
+        if not _av_rate_limited(data):
+            articles = data.get("feed", [])
+            if articles:
+                return {
+                    "ticker": ticker,
+                    "articles": [
+                        {
+                            "title":     a.get("title"),
+                            "source":    a.get("source"),
+                            "sentiment": a.get("overall_sentiment_label"),
+                            "score":     a.get("overall_sentiment_score"),
+                        }
+                        for a in articles[:limit]
+                    ],
+                }
+            return {"ticker": ticker, "articles": [], "note": f"No recent news data available for {ticker}"}
+    except Exception:
+        pass
+    # Fallback: yfinance news (no sentiment scores)
+    try:
+        raw = yf.Ticker(ticker).news or []
+        articles = [
+            {
+                "title":     n["content"]["title"],
+                "source":    n["content"]["provider"]["displayName"],
+                "sentiment": "N/A",
+                "score":     None,
             }
-        return {"ticker": ticker, "articles": [], "note": f"No recent news data available for {ticker}"}
+            for n in raw[:limit]
+            if n.get("content")
+        ]
+        return {
+            "ticker": ticker,
+            "articles": articles,
+            "note": "Sentiment unavailable — AlphaVantage limit reached, using yfinance news",
+        }
     except Exception as e:
         return {"ticker": ticker, "articles": [], "error": str(e)}
 
