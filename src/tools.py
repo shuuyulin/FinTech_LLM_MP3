@@ -13,21 +13,26 @@ def _av_rate_limited(data: dict) -> bool:
     return "Note" in data or "Information" in data
 
 
-def get_price_performance(tickers: list, period: str = "1y") -> dict:
+def get_price_performance(tickers: list, period: str = "1y", start: str = None, end: str = None) -> dict:
     results = {}
     for ticker in tickers:
         try:
-            data = yf.download(ticker, period=period, progress=False, auto_adjust=True)
+            if start or end:
+                data = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=True)
+                label = f"{start} to {end}"
+            else:
+                data = yf.download(ticker, period=period, progress=False, auto_adjust=True)
+                label = period
             if data.empty:
                 results[ticker] = {"error": "No data — possibly delisted"}
                 continue
-            start = float(data["Close"].iloc[0].item())
-            end   = float(data["Close"].iloc[-1].item())
+            open_price  = float(data["Close"].iloc[0].item())
+            close_price = float(data["Close"].iloc[-1].item())
             results[ticker] = {
-                "start_price": round(start, 2),
-                "end_price":   round(end, 2),
-                "pct_change":  round((end - start) / start * 100, 2),
-                "period":      period,
+                "start_price": round(open_price, 2),
+                "end_price":   round(close_price, 2),
+                "pct_change":  round((close_price - open_price) / open_price * 100, 2),
+                "period":      label,
             }
         except Exception as e:
             results[ticker] = {"error": str(e)}

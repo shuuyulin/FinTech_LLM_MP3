@@ -20,10 +20,14 @@ SCHEMA_TICKERS = _s(
 SCHEMA_PRICE = _s(
     "get_price_performance",
     "Get % price change for a list of tickers over a time period. "
-    "Periods: '1mo','3mo','6mo','ytd','1y'.",
+    "Use 'period' for relative ranges ('1mo','3mo','6mo','ytd','1y'), "
+    "or 'start'/'end' (YYYY-MM-DD) for a specific date range. "
+    "If both are provided, start/end takes precedence.",
     {
         "tickers": {"type": "array", "items": {"type": "string"}},
         "period":  {"type": "string", "default": "1y"},
+        "start":   {"type": "string", "description": "Start date in YYYY-MM-DD format"},
+        "end":     {"type": "string", "description": "End date in YYYY-MM-DD format"},
     },
     ["tickers"],
 )
